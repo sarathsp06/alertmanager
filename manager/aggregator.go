@@ -19,11 +19,9 @@ import (
 	"time"
 )
 
-type aggDispatchState int
-
 const (
-	aggUnsent aggDispatchState = iota
-	aggSent
+	minimumRefreshPeriod = 5 * time.Minute
+	notificationRetryPeriod = 1 * time.Minute
 )
 
 // AggregationRule creates and manages the scope for received events.
@@ -35,11 +33,21 @@ type AggregationRule struct {
 
 type AggregationInstance struct {
 	Rule   *AggregationRule
-	Events Events
+	Event *Event
 
-	EndsAt time.Time
+	// When was this AggregationInstance created?
+	Created time.Time
+	// When was the last refresh received into this AggregationInstance?
+	LastRefreshed time.Time
 
-	state aggDispatchState
+	// When was the last successful notification sent out for this
+	// AggregationInstance?
+	lastNotificationSent time.Time
+	// Timer used to trigger a notification retry/resend.
+	notificationResendTimer *time.Timer
+	// Timer used to trigger the deletion of the AggregationInstance after it
+	// hasn't been refreshed for too long.
+	expiryTimer *time.Timer
 }
 
 func (r *AggregationRule) Handles(e *Event) bool {
@@ -47,82 +55,57 @@ func (r *AggregationRule) Handles(e *Event) bool {
 }
 
 func (r *AggregationInstance) Ingest(e *Event) {
-	r.Events = append(r.Events, e)
-}
+	r.Event = e
+	r.LastRefreshed = time.Now()
 
-func (r *AggregationInstance) Tidy() {
-	// BUG(matt): Drop this in favor of having the entire AggregationInstance
-	// being dropped when too old.
-	log.Println("Tidying...")
-	if len(r.Events) == 0 {
-		return
-	}
-
-	events := Events{}
-
-	t := time.Now()
-	for _, e := range r.Events {
-		if t.Before(e.CreatedAt) {
-			events = append(events, e)
-		}
-	}
-
-	if len(events) == 0 {
-		r.state = aggSent
-	}
-
-	r.Events = events
+	r.expiryTimer.Reset(minimumRefreshPeriod)
 }
 
 func (r *AggregationInstance) SendNotification(s SummaryReceiver) {
-	if r.state == aggSent {
+	if time.Since(r.lastNotificationSent) < r.Rule.RepeatRate {
 		return
 	}
 
 	err := s.Receive(&EventSummary{
 		Rule:   r.Rule,
-		Events: r.Events,
+		Event: r.Event,
 	})
 	if err != nil {
-		if err.Retryable() {
-			return
-		}
-		log.Println("Unretryable error while sending notification:", err)
+		log.Printf("Error while sending notification: %s, retrying in %v", err, notificationRetryPeriod)
+		r.resendNotificationAfter(notificationRetryPeriod)
+		return
 	}
 
-	r.state = aggSent
+	r.resendNotificationAfter(r.Rule.RepeatRate)
+	r.lastNotificationSent = time.Now()
+}
+
+func (r *AggregationInstance) resendNotificationAfter(d time.Duration) {
+	timer := time.AfterFunc(d, func() {
+		r.SendNotification()
+	})
 }
 
 type AggregationRules []*AggregationRule
 
 type Aggregator struct {
 	Rules      AggregationRules
-	// Used for O(1) lookup and removal of aggregations when new ones come into the system.
-	Aggregates map[uint64]*AggregationInstance
-	// TODO: Add priority queue sorted by expiration time.Time (newest, oldest).
-	//       When a new element comes into this queue and the last head is not equal to
-	//       current head, cancel the existing internal timer and create a new timer for
-	//       expiry.Sub(time.Now) and have that (<- chan time.Time) funnel into the
-	//       event into the dispatch loop where the present tidy call is made.  Delete
-	//       tidy, and just shift the head element of the priority queue off and remove
-	//       it from the O(1) membership index above.
-
-	// TODO?: Build a new priority queue type that uses an internal wrapper container for
-	//        the AggregationInstance it decorates to note the last dispatch time.  The
-	//        queue uses higher-level add and remove methods.
-
-	// SHORTFALL: Needing to garbage collect aggregations across three containers?
+	Aggregates map[EventFingerprint]*AggregationInstance
 
 	aggRequests   chan *aggregateEventsRequest
+	getAggregatesRequests chan *getAggregatesRequest
+	removeAggregateRequests chan EventFingerprint
 	rulesRequests chan *aggregatorResetRulesRequest
 	closed        chan bool
 }
 
 func NewAggregator() *Aggregator {
 	return &Aggregator{
-		Aggregates: make(map[uint64]*AggregationInstance),
+		Aggregates: make(map[EventFingerprint]*AggregationInstance),
 
 		aggRequests:   make(chan *aggregateEventsRequest),
+		getAggregatesRequests:   make(chan *getAggregatesRequest),
+		removeAggregateRequests:   make(chan EventFingerprint),
 		rulesRequests: make(chan *aggregatorResetRulesRequest),
 		closed:        make(chan bool),
 	}
@@ -131,6 +114,8 @@ func NewAggregator() *Aggregator {
 func (a *Aggregator) Close() {
 	close(a.rulesRequests)
 	close(a.aggRequests)
+	close(a.getAggregatesRequests)
+	close(a.removeAggregateRequests)
 
 	<-a.closed
 	close(a.closed)
@@ -144,6 +129,10 @@ type aggregateEventsRequest struct {
 	Events Events
 
 	Response chan *aggregateEventsResponse
+}
+
+type getAggregatesRequest struct {
+	Response chan []*AggregationInstance
 }
 
 func (a *Aggregator) aggregate(req *aggregateEventsRequest, s SummaryReceiver) {
@@ -162,8 +151,14 @@ func (a *Aggregator) aggregate(req *aggregateEventsRequest, s SummaryReceiver) {
 				fp := element.Fingerprint()
 				aggregation, ok := a.Aggregates[fp]
 				if !ok {
+					expTimer := time.AfterFunc(minimumRefreshPeriod, func() {
+						a.removeAggregateRequests <- fp
+					})
+
 					aggregation = &AggregationInstance{
 						Rule: r,
+						Created: time.Now(),
+						expiryTimer: expTimer,
 					}
 
 					a.Aggregates[fp] = aggregation
@@ -194,6 +189,26 @@ func (a *Aggregator) replaceRules(r *aggregatorResetRulesRequest) {
 
 	r.Response <- new(aggregatorResetRulesResponse)
 	close(r.Response)
+}
+
+func (a *Aggregator) AlertAggregates() []*AggregationInstance {
+	req := &getAggregatesRequest{
+		Response: make(chan []*AggregationInstance),
+	}
+
+	a.getAggregatesRequests <- req
+
+	result := <-req.Response
+
+	return result
+}
+
+func (a *Aggregator) aggregates() []*AggregationInstance {
+	aggs := make([]*AggregationInstance, 0, len(a.Aggregates))
+	for _, agg := range a.Aggregates {
+		aggs = append(aggs, agg)
+	}
+	return aggs
 }
 
 func (a *Aggregator) Receive(e Events) error {
@@ -244,10 +259,13 @@ func (a *Aggregator) Dispatch(s SummaryReceiver) {
 				closed++
 			}
 
-		case <-t.C:
-			for _, a := range a.Aggregates {
-				a.Tidy()
-			}
+		case req := <-a.getAggregatesRequests:
+			aggs := a.aggregates()
+			req.Response <- aggs
+
+		case fp := <-a.removeAggregateRequests:
+			log.Println("Deleting expired aggregation instance", a)
+			delete(a.Aggregates, fp)
 		}
 	}
 

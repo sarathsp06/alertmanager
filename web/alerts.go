@@ -15,10 +15,22 @@ package web
 
 import (
 	"net/http"
+
+	"log"
+	"github.com/prometheus/alert_manager/manager"
 )
 
-type AlertsHandler struct {}
+type AlertStatus struct {
+	AlertAggregates []*manager.AggregationInstance
+}
+
+type AlertsHandler struct {
+	Aggregator *manager.Aggregator
+}
 
 func (h *AlertsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	executeTemplate(w, "alerts", nil)
+	alertStatus := &AlertStatus{
+		AlertAggregates: h.Aggregator.AlertAggregates(),
+	}
+	executeTemplate(w, "alerts", alertStatus)
 }
