@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"code.google.com/p/gorest"
 
@@ -24,8 +25,8 @@ import (
 )
 
 type Filter struct {
-	LabelRe string
-	ValueRe string
+	NamePattern string
+	ValuePattern string
 }
 
 type Silence struct {
@@ -36,8 +37,35 @@ type Silence struct {
 	Filters   []*Filter
 }
 
-func (s AlertManagerService) AddSilence(sc Silence) string {
-	s.Suppressor.Receive(&sc)
+func (s AlertManagerService) AddSilence(sc Silence) {
+	/*
+	endsAt, err := strconv.Atoi(sc.EndsAt)
+	if err != nil {
+		rb := s.ResponseBuilder()
+		rb.SetResponseCode(http.StatusBadRequest)
+		//return err.Error()
+		return
+	}
+	createdAt, err := strconv.Atoi(sc.CreatedAt)
+	if err != nil {
+		rb := s.ResponseBuilder()
+		rb.SetResponseCode(http.StatusBadRequest)
+		//return err.Error()
+		return
+	}*/
+	filters := make(manager.Filters, 0, len(sc.Filters))
+	for _, f := range sc.Filters {
+		filters = append(filters, manager.NewFilter(f.NamePattern, f.ValuePattern))
+	}
+
+	sup := &manager.Suppression{
+		CreatedBy: sc.CreatedBy,
+		CreatedAt: time.Unix(sc.CreatedAt, 0),
+		EndsAt: time.Unix(sc.EndsAt, 0),
+		Comment: sc.Comment,
+		Filters: filters,
+	}
+	s.Suppressor.AddSuppression(sup)
 }
 
 func (s AlertManagerService) SilenceSummary() string {

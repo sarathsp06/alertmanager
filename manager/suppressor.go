@@ -15,84 +15,36 @@ package manager
 
 import (
 	"container/heap"
+	"fmt"
 	"log"
 	"sort"
+	"sync"
 	"time"
 )
 
 type Suppression struct {
-	Id uint
-
-	Description string
-
-	Filters *Filters
-
-	EndsAt time.Time
-
+	Id        uint
 	CreatedBy string
 	CreatedAt time.Time
-}
-
-type suppressionRequest struct {
-	Suppression Suppression
-
-	Response chan *suppressionResponse
-}
-
-type suppressionResponse struct{}
-
-type isInhibitedRequest struct {
-	Event *Event
-
-	Response chan *isInhibitedResponse
-}
-
-type isInhibitedResponse struct {
-	Err error
-
-	Inhibited             bool
-	InhibitingSuppression *Suppression
-}
-
-type suppressionSummaryResponse struct {
-	Err error
-
-	Suppressions Suppressions
-}
-
-type suppressionSummaryRequest struct {
-	MatchCandidates map[string]string
-
-	Response chan *suppressionSummaryResponse
+	EndsAt    time.Time
+	Comment   string
+	Filters   Filters
 }
 
 type Suppressor struct {
-	Suppressions *Suppressions
-
-	suppressionReqs        chan *suppressionRequest
-	suppressionSummaryReqs chan *suppressionSummaryRequest
-	isInhibitedReqs        chan *isInhibitedRequest
+	Suppressions Suppressions
+	mu           sync.Mutex
 }
 
 type IsInhibitedInterrogator interface {
-	IsInhibited(*Event) bool
+	IsInhibited(*Event) (bool, *Suppression)
 }
 
 func NewSuppressor() *Suppressor {
-	suppressions := new(Suppressions)
-
-	heap.Init(suppressions)
-
-	return &Suppressor{
-		Suppressions: suppressions,
-
-		suppressionReqs:        make(chan *suppressionRequest),
-		suppressionSummaryReqs: make(chan *suppressionSummaryRequest),
-		isInhibitedReqs:        make(chan *isInhibitedRequest),
-	}
+	return &Suppressor{}
 }
 
-type Suppressions []Suppression
+type Suppressions []*Suppression
 
 func (s Suppressions) Len() int {
 	return len(s)
@@ -107,7 +59,7 @@ func (s Suppressions) Swap(i, j int) {
 }
 
 func (s *Suppressions) Push(v interface{}) {
-	*s = append(*s, v.(Suppression))
+	*s = append(*s, v.(*Suppression))
 }
 
 func (s *Suppressions) Pop() interface{} {
@@ -118,129 +70,98 @@ func (s *Suppressions) Pop() interface{} {
 	return item
 }
 
-func (s *Suppressor) dispatchSuppression(r *suppressionRequest) {
-	log.Println("dispatching suppression", r)
+func (s *Suppressor) nextSuppressionId() uint {
+	// BUG: generate proper ID.
+	return 1
+}
 
-	heap.Push(s.Suppressions, r.Suppression)
-	r.Response <- &suppressionResponse{}
-	close(r.Response)
+func (s *Suppressor) AddSuppression(sup *Suppression) uint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sup.Id = s.nextSuppressionId()
+	heap.Push(&s.Suppressions, sup)
+	return sup.Id
+}
+
+func (s *Suppressor) UpdateSuppression(sup *Suppression) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	oldSup, present := s.suppressionById(sup.Id)
+	if !present {
+		return fmt.Errorf("Suppression with ID %d doesn't exist", sup.Id)
+	}
+	*oldSup = *sup
+	return nil
+}
+
+func (s *Suppressor) GetSuppression(id uint) (*Suppression, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sup, present := s.suppressionById(id)
+	if !present {
+		return nil, fmt.Errorf("Suppression with ID %d doesn't exist", id)
+	}
+	return sup, nil
+}
+
+func (s *Suppressor) DelSuppression(id uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, sup := range s.Suppressions {
+		if sup.Id == id {
+			s.Suppressions = append(s.Suppressions[:i], s.Suppressions[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("Suppression with ID %d doesn't exist", id)
+}
+
+func (s *Suppressor) SuppressionSummary() Suppressions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	suppressions := make(Suppressions, 0, len(s.Suppressions))
+	for _, sup := range s.Suppressions {
+		suppressions = append(suppressions, sup)
+	}
+	return suppressions
+}
+
+func (s *Suppressor) IsInhibited(e *Event) (bool, *Suppression) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, s := range s.Suppressions {
+		if s.Filters.Handles(e) {
+			return true, s
+		}
+	}
+	return false, nil
+}
+
+func (s *Suppressor) suppressionById(id uint) (*Suppression, bool) {
+	// BUG: use a separate index for ID lookups once this becomes necessary.
+	for _, sup := range s.Suppressions {
+		if sup.Id == id {
+			return sup, true
+		}
+	}
+	return nil, false
 }
 
 func (s *Suppressor) reapSuppressions(t time.Time) {
 	log.Println("reaping suppression...")
 
-	i := sort.Search(len(*s.Suppressions), func(i int) bool {
-		return (*s.Suppressions)[i].EndsAt.After(t)
+	i := sort.Search(len(s.Suppressions), func(i int) bool {
+		return (s.Suppressions)[i].EndsAt.After(t)
 	})
 
-	*s.Suppressions = (*s.Suppressions)[i:]
+	s.Suppressions = s.Suppressions[i:]
 
 	// BUG(matt): Validate if strictly necessary.
-	heap.Init(s.Suppressions)
-}
-
-func (s *Suppressor) generateSummary(r *suppressionSummaryRequest) {
-	log.Println("Generating summary", r)
-	response := new(suppressionSummaryResponse)
-
-	for _, suppression := range *s.Suppressions {
-		response.Suppressions = append(response.Suppressions, suppression)
-	}
-
-	r.Response <- response
-	close(r.Response)
-}
-
-func (s *Suppressor) IsInhibited(e *Event) bool {
-	req := &isInhibitedRequest{
-		Event:    e,
-		Response: make(chan *isInhibitedResponse),
-	}
-
-	s.isInhibitedReqs <- req
-
-	resp := <-req.Response
-
-	return resp.Inhibited
-}
-
-func (s *Suppressor) queryInhibit(q *isInhibitedRequest) {
-	response := new(isInhibitedResponse)
-
-	for _, s := range *s.Suppressions {
-		if s.Filters.Handles(q.Event) {
-			response.Inhibited = true
-			response.InhibitingSuppression = &s
-
-			break
-		}
-	}
-
-	q.Response <- response
-	close(q.Response)
-}
-
-func (s *Suppressor) Close() {
-	close(s.suppressionReqs)
-	close(s.suppressionSummaryReqs)
-	close(s.isInhibitedReqs)
-}
-
-func (s *Suppressor) Receive(suppression *Suppression) {
-	req := &suppressionRequest{
-		Suppression: *suppression,
-		Response:    make(chan *suppressionResponse),
-	}
-
-	s.suppressionReqs <- req
-
-	<-req.Response
-}
-
-func (s *Suppressor) SuppressionSummary() Suppressions {
-	req := &suppressionSummaryRequest{
-		Response: make(chan *suppressionSummaryResponse),
-	}
-
-	s.suppressionSummaryReqs <- req
-
-	result := <-req.Response
-	return result.Suppressions
-}
-
-func (s *Suppressor) Dispatch() {
-	// BUG: Accomplish this more intelligently by creating a timer for the least-
-	//      likely-to-tenure item.
-	reaper := time.NewTicker(30 * time.Second)
-	defer reaper.Stop()
-
-	closed := 0
-
-	for closed < 2 {
-		select {
-		case suppression, open := <-s.suppressionReqs:
-			s.dispatchSuppression(suppression)
-
-			if !open {
-				closed++
-			}
-
-		case query, open := <-s.isInhibitedReqs:
-			s.queryInhibit(query)
-
-			if !open {
-				closed++
-			}
-
-		case summary, open := <-s.suppressionSummaryReqs:
-			s.generateSummary(summary)
-
-			if !open {
-				closed++
-			}
-
-		case time := <-reaper.C:
-			s.reapSuppressions(time)
-		}
-	}
+	heap.Init(&s.Suppressions)
 }
