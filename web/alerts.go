@@ -16,8 +16,8 @@ package web
 import (
 	"net/http"
 
-	"log"
 	"github.com/prometheus/alert_manager/manager"
+	"log"
 )
 
 type AlertStatus struct {

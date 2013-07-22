@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	minimumRefreshPeriod = 5 * time.Minute
+	minimumRefreshPeriod    = 5 * time.Minute
 	notificationRetryPeriod = 1 * time.Minute
 )
 
@@ -32,7 +32,7 @@ type AggregationRule struct {
 }
 
 type AggregationInstance struct {
-	Rule   *AggregationRule
+	Rule  *AggregationRule
 	Event *Event
 
 	// When was this AggregationInstance created?
@@ -67,7 +67,7 @@ func (r *AggregationInstance) SendNotification(s SummaryReceiver) {
 	}
 
 	err := s.Receive(&EventSummary{
-		Rule:   r.Rule,
+		Rule:  r.Rule,
 		Event: r.Event,
 	})
 	if err != nil {
@@ -92,22 +92,22 @@ type Aggregator struct {
 	Rules      AggregationRules
 	Aggregates map[EventFingerprint]*AggregationInstance
 
-	aggRequests   chan *aggregateEventsRequest
-	getAggregatesRequests chan *getAggregatesRequest
+	aggRequests             chan *aggregateEventsRequest
+	getAggregatesRequests   chan *getAggregatesRequest
 	removeAggregateRequests chan EventFingerprint
-	rulesRequests chan *aggregatorResetRulesRequest
-	closed        chan bool
+	rulesRequests           chan *aggregatorResetRulesRequest
+	closed                  chan bool
 }
 
 func NewAggregator() *Aggregator {
 	return &Aggregator{
 		Aggregates: make(map[EventFingerprint]*AggregationInstance),
 
-		aggRequests:   make(chan *aggregateEventsRequest),
+		aggRequests:             make(chan *aggregateEventsRequest),
 		getAggregatesRequests:   make(chan *getAggregatesRequest),
-		removeAggregateRequests:   make(chan EventFingerprint),
-		rulesRequests: make(chan *aggregatorResetRulesRequest),
-		closed:        make(chan bool),
+		removeAggregateRequests: make(chan EventFingerprint),
+		rulesRequests:           make(chan *aggregatorResetRulesRequest),
+		closed:                  make(chan bool),
 	}
 }
 
@@ -156,8 +156,8 @@ func (a *Aggregator) aggregate(req *aggregateEventsRequest, s SummaryReceiver) {
 					})
 
 					aggregation = &AggregationInstance{
-						Rule: r,
-						Created: time.Now(),
+						Rule:        r,
+						Created:     time.Now(),
 						expiryTimer: expTimer,
 					}
 
