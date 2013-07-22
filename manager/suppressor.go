@@ -39,9 +39,7 @@ type suppressionRequest struct {
 	Response chan *suppressionResponse
 }
 
-type suppressionResponse struct {
-	Err error
-}
+type suppressionResponse struct{}
 
 type isInhibitedRequest struct {
 	Event *Event
@@ -186,6 +184,28 @@ func (s *Suppressor) Close() {
 	close(s.suppressionReqs)
 	close(s.suppressionSummaryReqs)
 	close(s.isInhibitedReqs)
+}
+
+func (s *Suppressor) Receive(suppression *Suppression) {
+	req := &suppressionRequest{
+		Suppression: *suppression,
+		Response:    make(chan *suppressionResponse),
+	}
+
+	s.suppressionReqs <- req
+
+	<-req.Response
+}
+
+func (s *Suppressor) SuppressionSummary() Suppressions {
+	req := &suppressionSummaryRequest{
+		Response: make(chan *suppressionSummaryResponse),
+	}
+
+	s.suppressionSummaryReqs <- req
+
+	result := <-req.Response
+	return result.Suppressions
 }
 
 func (s *Suppressor) Dispatch() {

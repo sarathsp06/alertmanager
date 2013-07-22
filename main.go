@@ -42,6 +42,7 @@ func main() {
 	webService := &web.WebService{
 		AlertManagerService: &api.AlertManagerService{
 			Aggregator: aggregator,
+			Suppressor: suppressor,
 		},
 		AlertsHandler: &web.AlertsHandler{
 			Aggregator: aggregator,
