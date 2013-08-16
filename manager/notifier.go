@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -36,13 +37,11 @@ const bodyTmpl = `Subject: [ALERT] {{.Labels.alertname}}: {{.Summary}}
 
 Grouping labels:
 {{range $label, $value := .Labels}}
-  {{$label}} = "{{$value}}"
-{{end}}
+  {{$label}} = "{{$value}}"{{end}}
 
 Payload labels:
 {{range $label, $value := .Payload}}
-  {{$label}} = "{{$value}}"
-{{end}}`
+  {{$label}} = "{{$value}}"{{end}}`
 
 var (
 	notificationBufferSize = flag.Int("notificationBufferSize", 1000, "Size of buffer for pending notifications.")
@@ -157,6 +156,17 @@ func (n *notifier) sendPagerDutyNotification(serviceKey string, event *Event) er
 	return nil
 }
 
+func writeEmailBody(w io.Writer, event *Event) error {
+	t := template.New("message")
+	if _, err := t.Parse(bodyTmpl); err != nil {
+		return err
+	}
+	if err := t.Execute(w, event); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (n *notifier) sendEmailNotification(email string, event *Event) error {
 	// Connect to the SMTP smarthost.
 	c, err := smtp.Dial(*smtpSmartHost)
@@ -176,14 +186,7 @@ func (n *notifier) sendEmailNotification(email string, event *Event) error {
 	}
 	defer wc.Close()
 
-	t := template.New("message")
-	if _, err := t.Parse(bodyTmpl); err != nil {
-		return err
-	}
-	if err := t.Execute(wc, event); err != nil {
-		return err
-	}
-	return nil
+	return writeEmailBody(wc, event)
 }
 
 func (n *notifier) handleNotification(event *Event, config *pb.NotificationConfig, i IsInhibitedInterrogator) {
