@@ -43,9 +43,9 @@ func init() {
 	buildInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "alertmanager_build_info",
-			Help: "A metric with a constant '1' value labeled by version, revision, and branch from which Alertmanager was built.",
+			Help: "A metric with a constant '1' value labeled by version, revision, branch, and goversion from which Alertmanager was built.",
 		},
-		[]string{"version", "revision", "branch"},
+		[]string{"version", "revision", "branch", "goversion"},
 	)
 	buildInfo.WithLabelValues(Version, Revision, Branch).Set(1)
 
