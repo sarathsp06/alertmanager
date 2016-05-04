@@ -181,6 +181,26 @@ func (c *Config) UnmarshalYAML(unmarshal func(interface{}) error) error {
 				sc.APIURL = c.Global.SlackAPIURL
 			}
 		}
+		for _, cl := range rcv.CallConfigs {
+			if cl.SuffixToken == "" {
+				if c.Global.SuffixToken == "" {
+					return fmt.Errorf("no global Suffix Token set for call")
+				}
+				cl.SuffixToken = c.Global.SuffixToken
+			}
+			if cl.SuffixUsername == "" {
+				if c.Global.SuffixUsername == "" {
+					return fmt.Errorf("no global Suffix Username set for call")
+				}
+				cl.SuffixUsername = c.Global.SuffixUsername
+			}
+			if cl.SuffixAccount == "" {
+				if c.Global.SuffixAccount == "" {
+					return fmt.Errorf("no global Suffix account set for call")
+				}
+				cl.SuffixAccount = c.Global.SuffixAccount
+			}
+		}
 		for _, hc := range rcv.HipchatConfigs {
 			if hc.APIURL == "" {
 				if c.Global.HipchatURL == "" {
@@ -278,6 +298,9 @@ type GlobalConfig struct {
 	HipchatURL       string `yaml:"hipchat_url"`
 	HipchatAuthToken Secret `yaml:"hipchat_auth_token"`
 	OpsGenieAPIHost  string `yaml:"opsgenie_api_host"`
+	SuffixUsername   string `yaml:"suffix_username"`
+	SuffixToken      Secret `yaml:"suffix_token"`
+	SuffixAccount    string `yaml:"suffix_account"`
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.
@@ -397,12 +420,12 @@ func (r *InhibitRule) UnmarshalYAML(unmarshal func(interface{}) error) error {
 // Receiver configuration provides configuration on how to contact a receiver.
 type Receiver struct {
 	// A unique identifier for this receiver.
-	Name string `yaml:"name"`
-
+	Name             string             `yaml:"name"`
 	EmailConfigs     []*EmailConfig     `yaml:"email_configs,omitempty"`
 	PagerdutyConfigs []*PagerdutyConfig `yaml:"pagerduty_configs,omitempty"`
 	HipchatConfigs   []*HipchatConfig   `yaml:"hipchat_configs,omitempty"`
 	SlackConfigs     []*SlackConfig     `yaml:"slack_configs,omitempty"`
+	CallConfigs      []*CallConfig      `yaml:"call_configs,omitempty"`
 	WebhookConfigs   []*WebhookConfig   `yaml:"webhook_configs,omitempty"`
 	OpsGenieConfigs  []*OpsGenieConfig  `yaml:"opsgenie_configs,omitempty"`
 	PushoverConfigs  []*PushoverConfig  `yaml:"pushover_configs,omitempty"`

@@ -70,6 +70,14 @@ var (
 		Fallback:  `{{ template "slack.default.fallback" . }}`,
 	}
 
+	//DefaultCallConfig defines default valus for call
+	DefaultCallConfig = CallConfig{
+		NotifierConfig: NotifierConfig{
+			VSendResolved: false,
+		},
+		Message: `{{template "call.default.fallback" .}}`,
+	}
+
 	// DefaultHipchatConfig defines default values for Hipchat configurations.
 	DefaultHipchatConfig = HipchatConfig{
 		NotifierConfig: NotifierConfig{
@@ -220,6 +228,32 @@ func (c *SlackConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		return fmt.Errorf("missing channel in Slack config")
 	}
 	return checkOverflow(c.XXX, "slack config")
+}
+
+// CallConfig configures notifications via Call.
+type CallConfig struct {
+	NotifierConfig `yaml:",inline"`
+
+	// Slack channel override, (like #other-channel or @username).
+	From           string `yaml:"from"`
+	To             string `yaml:"to"`
+	Message        string `yaml:"message"`
+	SuffixToken    Secret `yaml:"suffix_token"`
+	SuffixUsername string `yaml:"suffix_username"`
+	SuffixAccount  string `yaml:"suffix_account"`
+
+	// Catches all undefined fields and must be empty after parsing.
+	XXX map[string]interface{} `yaml:",inline"`
+}
+
+// UnmarshalYAML implements the yaml.Unmarshaler interface.
+func (c *CallConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	*c = DefaultCallConfig
+	type plain CallConfig
+	if err := unmarshal((*plain)(c)); err != nil {
+		return err
+	}
+	return checkOverflow(c.XXX, "Call config")
 }
 
 // HipchatConfig configures notifications via Hipchat.

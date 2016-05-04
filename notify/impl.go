@@ -131,6 +131,10 @@ func Build(confs []*config.Receiver, tmpl *template.Template) map[string]Fanout 
 			n := NewSlack(c, tmpl)
 			add(i, n, filter(n, c))
 		}
+		for i, c := range nc.CallConfigs {
+			n := NewCall(c, tmpl)
+			add(i, n, filter(n, c))
+		}
 		for i, c := range nc.HipchatConfigs {
 			n := NewHipchat(c, tmpl)
 			add(i, n, filter(n, c))
@@ -528,6 +532,53 @@ func (n *Slack) Notify(ctx context.Context, as ...*types.Alert) error {
 		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 
+	return nil
+}
+
+//Call implements a Notifier with Call
+type Call struct {
+	conf *config.CallConfig
+	tmpl *template.Template
+}
+
+// NewCall returns a new Call notification handler.
+func NewCall(conf *config.CallConfig, tmpl *template.Template) *Call {
+	return &Call{
+		conf: conf,
+		tmpl: tmpl,
+	}
+}
+
+func (*Call) name() string { return "Call" }
+
+// Notify implements the Notifier interface.
+func (n *Call) Notify(ctx context.Context, as ...*types.Alert) error {
+	var err error
+	var (
+		data     = n.tmpl.Data(receiver(ctx), groupLabels(ctx), as...)
+		tmplText = tmplText(n.tmpl, data, &err)
+		APIURL   = fmt.Sprintf("https://%s:%s@api.suffix.io/v1/Accounts/%s/Calls",
+			n.conf.SuffixUsername,
+			n.conf.SuffixToken,
+			n.conf.SuffixAccount,
+		)
+		sayURL = "http://52.3.68.128:8080/verb/say?text=%s"
+	)
+	req := make(url.Values)
+	req.Add("From", n.conf.From)
+	req.Add("To", n.conf.To)
+	req.Add("Url", fmt.Sprintf(sayURL, tmplText(n.conf.Message)))
+	req.Add("Method", "GET")
+
+	fmt.Println("Making call", APIURL, req)
+	resp, err := ctxhttp.PostForm(ctx, http.DefaultClient, APIURL, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
+	}
 	return nil
 }
 
